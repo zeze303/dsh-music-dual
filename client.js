@@ -96,7 +96,15 @@ window.__ModuleLoader__.load({
 			".dshm-qr-tip{font-size:10px;color:rgba(255,255,255,0.6);text-align:center;line-height:14px}",
 			".dshm-login-actions{display:flex;gap:6px}",
 			".dshm-btn-login{flex:1;border:none;border-radius:9px;background:rgba(255,255,255,0.16);color:#fff;font-size:11px;padding:5px 0;cursor:pointer;text-align:center}",
-			".dshm-btn-login:hover{background:rgba(255,255,255,0.26)}"
+			".dshm-btn-login:hover{background:rgba(255,255,255,0.26)}",
+			// 歌单选择栏
+			".dshm-pls{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;max-height:56px;overflow-y:auto;scrollbar-width:thin}",
+			".dshm-pl{display:flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.8);border-radius:8px;font-size:10px;padding:3px 6px;cursor:pointer;max-width:100%}",
+			".dshm-pl:hover{background:rgba(255,255,255,0.16)}",
+			".dshm-pl-active{background:rgba(255,255,255,0.28);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.3)}",
+			".dshm-pl-name{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".dshm-pl-x{flex:none;border:none;background:transparent;color:rgba(255,255,255,0.6);cursor:pointer;font-size:10px;padding:0 1px;border-radius:4px}",
+			".dshm-pl-x:hover{color:#ff8d9a;background:rgba(255,141,154,0.2)}"
 		].join("");
 
 		/** Inject the player stylesheet once. */
@@ -202,6 +210,14 @@ window.__ModuleLoader__.load({
 				["path", { d: "M3 17h7" }],
 				["line", { x1: 18, y1: 15, x2: 18, y2: 21 }],
 				["line", { x1: 15, y1: 18, x2: 21, y2: 18 }]
+			],
+			list: [
+				["line", { x1: 8, y1: 6, x2: 21, y2: 6 }],
+				["line", { x1: 8, y1: 12, x2: 21, y2: 12 }],
+				["line", { x1: 8, y1: 18, x2: 21, y2: 18 }],
+				["line", { x1: 3, y1: 6, x2: 3.01, y2: 6 }],
+				["line", { x1: 3, y1: 12, x2: 3.01, y2: 12 }],
+				["line", { x1: 3, y1: 18, x2: 3.01, y2: 18 }]
 			],
 			chevronDown: [["polyline", { points: "6 9 12 15 18 9" }]],
 			chevronUp: [["polyline", { points: "6 15 12 9 18 15" }]],
@@ -322,8 +338,7 @@ window.__ModuleLoader__.load({
 			var [current, setCurrent] = react.useState(0);
 			var [duration, setDuration] = react.useState(0);
 			var [error, setError] = react.useState(null);
-			var [searchMode, setSearchMode] = react.useState(false);
-			var [panelMode, setPanelMode] = react.useState("search"); // search | login
+			var [view, setView] = react.useState("queue"); // queue | search | playlists | login
 			var [searchPlatform, setSearchPlatform] = react.useState("netease");
 			var [searchQuery, setSearchQuery] = react.useState("");
 			var [searching, setSearching] = react.useState(false);
@@ -745,7 +760,7 @@ window.__ModuleLoader__.load({
 				}
 				run({ action: "importPlaylist", id: match[1], platform: searchPlatform, clear: true });
 				setPlaylistDraft("");
-				setSearchMode(false);
+				setView("playlists");
 				setResults(null);
 				setSearchError(null);
 			};
@@ -915,29 +930,38 @@ window.__ModuleLoader__.load({
 								})
 							}, h(Icon, { name: "chevronDown", size: 14 }))
 						]),
-						// 展开态按钮组：搜索切换 / 折叠（视图过渡结束后淡入）
+						// 展开态按钮组：视图切换（队列/搜索/歌单/登录）+ 折叠
 						h("div", { className: "dshm-head-group" + (expanded ? " dshm-head-group-in" : " dshm-head-group-out"), key: "full" }, [
 							h("button", {
-								className: "dshm-btn dshm-vt-fade",
-								title: searchMode ? "返回播放列表" : "搜索音乐（网易云 / QQ 音乐）",
+								className: "dshm-btn dshm-vt-fade" + (view === "queue" ? " dshm-btn-active" : ""),
+								title: "播放列表",
+								onClick: handleClick(function (event) { event.stopPropagation(); setView("queue"); })
+							}, h(Icon, { name: "list", size: 14 })),
+							h("button", {
+								className: "dshm-btn dshm-vt-fade" + (view === "search" ? " dshm-btn-active" : ""),
+								title: "搜索音乐（网易云 / QQ 音乐）",
 								onClick: handleClick(function (event) {
 									event.stopPropagation();
-									setSearchMode(function (prev) {
-										if (!prev) { setSearchQuery(""); setResults(null); setSearchError(null); }
-										return !prev;
-									});
+									setView("search");
+									setSearchQuery("");
+									setResults(null);
+									setSearchError(null);
 								})
-							}, h(Icon, { name: searchMode ? "arrowLeft" : "search", size: 14 })),
-								h("button", {
-									className: "dshm-btn dshm-vt-fade" + ((loginStatus.netease && loginStatus.netease.loggedIn) || (loginStatus.qq && loginStatus.qq.loggedIn) ? " dshm-btn-active" : ""),
-									title: "登录 / 账号（扫码或粘贴 cookie）",
-									onClick: handleClick(function (event) {
-										event.stopPropagation();
-										setSearchMode(true);
-										setPanelMode("login");
-										refreshLoginStatus();
-									})
-								}, h(Icon, { name: "user", size: 14 })),
+							}, h(Icon, { name: "search", size: 14 })),
+							h("button", {
+								className: "dshm-btn dshm-vt-fade" + (view === "playlists" ? " dshm-btn-active" : ""),
+								title: "歌单管理",
+								onClick: handleClick(function (event) { event.stopPropagation(); setView("playlists"); })
+							}, h(Icon, { name: "import_", size: 14 })),
+							h("button", {
+								className: "dshm-btn dshm-vt-fade" + (view === "login" ? " dshm-btn-active" : ""),
+								title: "登录 / 账号（扫码或粘贴 cookie）",
+								onClick: handleClick(function (event) {
+									event.stopPropagation();
+									setView("login");
+									refreshLoginStatus();
+								})
+							}, h(Icon, { name: "user", size: 14 })),
 							h("button", {
 								className: "dshm-btn dshm-vt-fade",
 								title: "折叠",
@@ -1001,31 +1025,176 @@ window.__ModuleLoader__.load({
 							}),
 							h("span", { className: "dshm-mode" }, modeLabel[remote ? remote.mode : "list"])
 						]),
-						searchMode
+						view === "queue"
 							? [
-								h("div", { className: "dshm-tabs" }, [
-									h("button", {
-										className: "dshm-tab" + (searchPlatform === "netease" && panelMode === "search" ? " dshm-tab-active" : ""),
-										title: "网易云音乐搜索",
-										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("netease"); setPanelMode("search"); })
-									}, "网易云"),
-									h("button", {
-										className: "dshm-tab" + (searchPlatform === "qq" && panelMode === "search" ? " dshm-tab-active" : ""),
-										title: "QQ 音乐搜索",
-										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("qq"); setPanelMode("search"); })
-									}, "QQ 音乐"),
-									h("button", {
-										className: "dshm-tab" + (panelMode === "login" ? " dshm-tab-active" : ""),
-										title: "登录 / 账号（扫码或粘贴 cookie）",
-										onClick: handleClick(function (event) {
-											event.stopPropagation();
-											setPanelMode("login");
-											refreshLoginStatus();
+								h("div", { className: "dshm-pls" },
+									(remote && remote.playlists && remote.playlists.length > 0 ? remote.playlists : []).map(function (p) {
+										return h("span", {
+											className: "dshm-pl" + (remote && remote.activePlaylistId === p.id ? " dshm-pl-active" : ""),
+											key: p.id,
+											title: p.name + "（" + p.count + " 首）",
+											onClick: handleClick(function (event) {
+												event.stopPropagation();
+												run({ action: "playlistSwitch", id: p.id });
+											})
+										}, [
+											h("span", { className: "dshm-pl-name" }, p.name),
+											h("button", {
+												className: "dshm-pl-x",
+												title: "删除歌单",
+												onClick: function (event) {
+													event.stopPropagation();
+													run({ action: "playlistRemove", id: p.id });
+												}
+											}, h(Icon, { name: "close", size: 8 }))
+										]);
+									})
+								),
+								h("div", { className: "dshm-list", onWheel: stopListWheel },
+									remote && remote.queue.length === 0
+										? h("div", { className: "dshm-empty" }, "播放列表为空")
+										: remote && remote.queue.map(function (item, i) {
+											return h("div", {
+												className: "dshm-item" + (i === remote.index ? " dshm-item-current" : ""),
+												key: item.id + "-" + i,
+												onClick: handleClick(function () { run({ action: "play", index: i }); })
+											}, [
+												h("span", {
+													className: "dshm-tag " + (item.platform === "qq" ? "dshm-tag-qq" : (item.platform === "netease" ? "dshm-tag-netease" : ""))
+												}, item.platform === "qq" ? "QQ" : (item.platform === "netease" ? "网易" : "直链")),
+												h("span", { className: "dshm-item-title" }, item.title),
+												h("span", { className: "dshm-item-sub" }, item.artist),
+												h("button", {
+													className: "dshm-item-action dshm-item-remove",
+													title: "移除",
+													onClick: function (event) {
+														event.stopPropagation();
+														run({ action: "remove", index: i });
+													}
+												}, h(Icon, { name: "close", size: 10 }))
+											]);
 										})
-									}, "🔑 登录")
-								]),
-								panelMode === "login"
+								),
+								remote && !remote.builtin
+									? h("div", {
+										className: "dshm-empty",
+										style: { cursor: "pointer", color: "rgba(255,255,255,0.75)", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 },
+										title: "恢复默认歌单",
+										onClick: handleClick(function () { run({ action: "builtin", enable: true }); })
+									}, [h(Icon, { name: "restore", size: 11 }), "恢复默认歌单"])
+									: null
+							]
+							: view === "search"
+								? [
+									h("div", { className: "dshm-tabs" }, [
+										h("button", {
+											className: "dshm-tab" + (searchPlatform === "netease" ? " dshm-tab-active" : ""),
+											title: "网易云音乐搜索",
+											onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("netease"); })
+										}, "网易云"),
+										h("button", {
+											className: "dshm-tab" + (searchPlatform === "qq" ? " dshm-tab-active" : ""),
+											title: "QQ 音乐搜索",
+											onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("qq"); })
+										}, "QQ 音乐")
+									]),
+									h("div", { className: "dshm-search" }, [
+										h("input", {
+											className: "dshm-input",
+											placeholder: searchPlatform === "qq" ? "QQ 音乐歌名或歌手，回车搜索" : "歌名或歌手，回车搜索",
+											title: "输入歌名或歌手，回车搜索",
+											value: searchQuery,
+											onChange: function (event) { setSearchQuery(event.target.value); },
+											onKeyDown: function (event) { if (event.key === "Enter") doSearch(); }
+										}),
+										h("button", {
+											className: "dshm-btn dshm-btn-primary",
+											title: "搜索",
+											disabled: searching,
+											onClick: handleClick(doSearch)
+										}, h(Icon, { name: "search", size: 13 }))
+									]),
+									h("div", { className: "dshm-list", onWheel: stopListWheel },
+										searching
+											? h("div", { className: "dshm-empty" }, "搜索中…")
+											: results === null
+												? null
+												: results.length === 0
+													? h("div", { className: "dshm-empty" }, searchError || "没有搜索结果")
+													: results.map(function (song) {
+														return h("div", {
+															className: "dshm-item",
+															key: song.id,
+															onClick: handleClick(function () { addSong(song); })
+														}, [
+															h("span", { className: "dshm-item-title" }, song.name + " - " + song.artist),
+															h("span", { className: "dshm-item-sub" }, song.durationMs ? formatTime(song.durationMs / 1000) : ""),
+															h("button", {
+																className: "dshm-item-action",
+																title: "加入播放列表",
+																onClick: function (event) {
+																	event.stopPropagation();
+																	addSong(song);
+																}
+															}, h(Icon, { name: "plus", size: 12 }))
+														]);
+													})
+									),
+									h("div", { className: "dshm-note" }, "受版权/VIP 限制的歌曲可能无法播放" + (searchPlatform === "qq" && !(loginStatus.qq && loginStatus.qq.loggedIn) ? "；QQ 音乐完整播放需先登录" : ""))
+								]
+								: view === "playlists"
 									? [
+										h("div", { className: "dshm-tabs" }, [
+											h("button", {
+												className: "dshm-tab" + (searchPlatform === "netease" ? " dshm-tab-active" : ""),
+												title: "网易云歌单",
+												onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("netease"); })
+											}, "网易云"),
+											h("button", {
+												className: "dshm-tab" + (searchPlatform === "qq" ? " dshm-tab-active" : ""),
+												title: "QQ 音乐歌单",
+												onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("qq"); })
+											}, "QQ 音乐")
+										]),
+										h("div", { className: "dshm-search" }, [
+											h("input", {
+												className: "dshm-input",
+												placeholder: searchPlatform === "qq" ? "QQ 音乐歌单链接或 id" : "网易云歌单链接或 id",
+												title: searchPlatform === "qq" ? "粘贴 QQ 音乐歌单链接或 id，回车导入" : "粘贴网易云歌单链接或 id，回车导入",
+												value: playlistDraft,
+												onChange: function (event) { setPlaylistDraft(event.target.value); },
+												onKeyDown: function (event) { if (event.key === "Enter") importPlaylist(); }
+											}),
+											h("button", {
+												className: "dshm-btn dshm-btn-primary",
+												title: "导入歌单",
+												onClick: handleClick(importPlaylist)
+											}, h(Icon, { name: "import_", size: 13 }))
+										]),
+										h("div", { className: "dshm-list", onWheel: stopListWheel },
+											remote && remote.playlists && remote.playlists.length === 0
+												? h("div", { className: "dshm-empty" }, "还没有导入歌单，粘贴链接或 id 导入")
+												: remote && remote.playlists.map(function (p) {
+													return h("div", {
+														className: "dshm-item" + (remote.activePlaylistId === p.id ? " dshm-item-current" : ""),
+														key: p.id,
+														onClick: handleClick(function () { run({ action: "playlistSwitch", id: p.id }); })
+													}, [
+														h("span", { className: "dshm-item-title" }, p.name),
+														h("span", { className: "dshm-item-sub" }, p.count + " 首 · " + (p.platform === "qq" ? "QQ" : "网易云")),
+														h("button", {
+															className: "dshm-item-action dshm-item-remove",
+															title: "删除歌单",
+															onClick: function (event) {
+																event.stopPropagation();
+																run({ action: "playlistRemove", id: p.id });
+															}
+														}, h(Icon, { name: "close", size: 10 }))
+													]);
+												})
+										)
+									]
+									: [
 										h("div", { className: "dshm-tabs" }, [
 											h("button", {
 												className: "dshm-tab" + (loginTab === "netease" ? " dshm-tab-active" : ""),
@@ -1131,103 +1300,7 @@ window.__ModuleLoader__.load({
 												]),
 												loginMsg ? h("div", { className: "dshm-note", style: { color: "rgba(124,255,178,0.9)" } }, loginMsg) : null
 											])
-									]
-									: [
-								h("div", { className: "dshm-search" }, [
-									h("input", {
-										className: "dshm-input",
-										placeholder: searchPlatform === "qq" ? "QQ 音乐歌单链接或 id" : "网易云歌单链接或 id",
-										title: searchPlatform === "qq" ? "粘贴 QQ 音乐歌单链接或 id，回车导入" : "粘贴网易云歌单链接或 id，回车导入",
-										value: playlistDraft,
-										onChange: function (event) { setPlaylistDraft(event.target.value); },
-										onKeyDown: function (event) { if (event.key === "Enter") importPlaylist(); }
-									}),
-									h("button", {
-										className: "dshm-btn dshm-btn-primary",
-										title: "导入歌单（替换默认歌单）",
-										onClick: handleClick(importPlaylist)
-									}, h(Icon, { name: "import_", size: 13 }))
-								]),
-								h("div", { className: "dshm-search" }, [
-									h("input", {
-										className: "dshm-input",
-										placeholder: searchPlatform === "qq" ? "QQ 音乐歌名或歌手，回车搜索" : "歌名或歌手，回车搜索",
-										title: "输入歌名或歌手，回车搜索",
-										value: searchQuery,
-										onChange: function (event) { setSearchQuery(event.target.value); },
-										onKeyDown: function (event) { if (event.key === "Enter") doSearch(); }
-									}),
-									h("button", {
-										className: "dshm-btn dshm-btn-primary",
-										title: "搜索",
-										disabled: searching,
-										onClick: handleClick(doSearch)
-									}, h(Icon, { name: "search", size: 13 }))
-								]),
-								h("div", { className: "dshm-list", onWheel: stopListWheel },
-									searching
-										? h("div", { className: "dshm-empty" }, "搜索中…")
-										: results === null
-											? null
-											: results.length === 0
-												? h("div", { className: "dshm-empty" }, searchError || "没有搜索结果")
-												: results.map(function (song) {
-													return h("div", {
-														className: "dshm-item",
-														key: song.id,
-														onClick: handleClick(function () { addSong(song); })
-													}, [
-														h("span", { className: "dshm-item-title" }, song.name + " - " + song.artist),
-														h("span", { className: "dshm-item-sub" }, song.durationMs ? formatTime(song.durationMs / 1000) : ""),
-														h("button", {
-															className: "dshm-item-action",
-															title: "加入播放列表",
-															onClick: function (event) {
-																event.stopPropagation();
-																addSong(song);
-															}
-														}, h(Icon, { name: "plus", size: 12 }))
-													]);
-												})
-								),
-								h("div", { className: "dshm-note" }, "受版权/VIP 限制的歌曲可能无法播放" + (searchPlatform === "qq" && !(loginStatus.qq && loginStatus.qq.loggedIn) ? "；QQ 音乐完整播放需先登录（🔑 登录 tab）" : ""))
-									]
-									]
-									: [
-								h("div", { className: "dshm-list", onWheel: stopListWheel },
-									remote && remote.queue.length === 0
-										? h("div", { className: "dshm-empty" }, "播放列表为空")
-										: remote && remote.queue.map(function (item, i) {
-											return h("div", {
-												className: "dshm-item" + (i === remote.index ? " dshm-item-current" : ""),
-												key: item.id + "-" + i,
-												onClick: handleClick(function () { run({ action: "play", index: i }); })
-											}, [
-												h("span", {
-													className: "dshm-tag " + (item.platform === "qq" ? "dshm-tag-qq" : (item.platform === "netease" ? "dshm-tag-netease" : ""))
-												}, item.platform === "qq" ? "QQ" : (item.platform === "netease" ? "网易" : "直链")),
-												h("span", { className: "dshm-item-title" }, item.title),
-												h("span", { className: "dshm-item-sub" }, item.artist),
-												h("button", {
-													className: "dshm-item-action dshm-item-remove",
-													title: "移除",
-													onClick: function (event) {
-														event.stopPropagation();
-														run({ action: "remove", index: i });
-													}
-												}, h(Icon, { name: "close", size: 10 }))
-											]);
-										})
-								),
-								remote && !remote.builtin
-									? h("div", {
-										className: "dshm-empty",
-										style: { cursor: "pointer", color: "rgba(255,255,255,0.75)", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 },
-										title: "恢复默认歌单",
-										onClick: handleClick(function () { run({ action: "builtin", enable: true }); })
-									}, [h(Icon, { name: "restore", size: 11 }), "恢复默认歌单"])
-									: null
-							],
+									],
 						error ? h("div", {
 							className: "dshm-error",
 							title: "点击关闭",

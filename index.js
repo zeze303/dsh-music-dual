@@ -132,9 +132,15 @@ const PLATFORMS = ["netease", "qq"];
 /** Clamp a number into [0, 1]. */
 const clamp01 = (value) => Math.min(1, Math.max(0, Number(value) || 0));
 
-/** Compose the queue: built-ins first (when enabled), then session custom tracks. */
-function composeQueue(custom, useBuiltin) {
-	return [...(useBuiltin ? BUILTIN_TRACKS : []), ...custom];
+/** Compose the queue: built-in default playlist (when enabled) first, then the
+ * active imported playlist's tracks, then loose custom tracks added by search. */
+function composeQueue(state) {
+	const active = state.playlists.find((p) => p.id === state.activePlaylistId);
+	return [
+		...(state.useBuiltin ? BUILTIN_TRACKS : []),
+		...(active ? active.tracks : []),
+		...state.custom
+	];
 }
 
 /** Fresh state on every load: no persistence, the default library is the playlist. */
@@ -147,6 +153,8 @@ function defaultState() {
 		mode: "list",
 		custom: [],
 		useBuiltin: true,
+		playlists: [],
+		activePlaylistId: null,
 		version: 1
 	};
 }
@@ -160,6 +168,8 @@ function publicState(state) {
 		volume: state.volume,
 		mode: state.mode,
 		builtin: state.useBuiltin,
+		playlists: state.playlists.map((p) => ({ id: p.id, name: p.name, platform: p.platform, count: p.tracks.length })),
+		activePlaylistId: state.activePlaylistId,
 		version: state.version
 	};
 }
@@ -222,7 +232,7 @@ async function applyCommand(state, command) {
 				url
 			};
 			state.custom.push(track);
-			state.queue = composeQueue(state.custom, state.useBuiltin);
+			state.queue = composeQueue(state);
 			state.version += 1;
 			return { ok: true, message: `已添加「${track.title}」到播放列表` };
 		}
@@ -230,8 +240,15 @@ async function applyCommand(state, command) {
 			const target = Number(command.index);
 			if (!Number.isInteger(target) || target < 0 || target >= len) return { ok: false, message: "索引无效" };
 			const removed = state.queue[target];
-			state.custom = state.custom.filter((track) => track.id !== removed.id);
-			state.queue = composeQueue(state.custom, state.useBuiltin);
+			// Find which source owns the track: the active playlist or loose customs.
+			const active = state.playlists.find((p) => p.id === state.activePlaylistId);
+			const inActive = active && active.tracks.some((t) => t.id === removed.id);
+			if (inActive) {
+				active.tracks = active.tracks.filter((t) => t.id !== removed.id);
+			} else {
+				state.custom = state.custom.filter((track) => track.id !== removed.id);
+			}
+			state.queue = composeQueue(state);
 			if (state.index > target) state.index -= 1;
 			else if (state.index === target && state.queue.length > 0) state.index = state.index % state.queue.length;
 			if (state.queue.length === 0) {
@@ -248,7 +265,8 @@ async function applyCommand(state, command) {
 			if (id === void 0) return { ok: false, message: "歌单 id 或链接无效" };
 			const playlist = platform === "qq" ? await qqPlaylist(id) : await neteasePlaylist(id);
 			if (playlist.tracks.length === 0) return { ok: false, message: "歌单为空、不可访问或已失效" };
-			state.custom = playlist.tracks.map((row) => platform === "qq"
+			const playlistId = `${platform}-${id}`;
+			const newTracks = playlist.tracks.map((row) => platform === "qq"
 				? {
 					id: `qq-${row.id}`,
 					platform: "qq",
@@ -265,32 +283,79 @@ async function applyCommand(state, command) {
 					cover: row.cover,
 					url: neteaseStreamUrl(row.id)
 				});
+			const existing = state.playlists.find((p) => p.id === playlistId);
+			if (existing) {
+				// Same playlist re-imported: refresh its tracks and activate it.
+				existing.name = playlist.name;
+				existing.tracks = newTracks;
+			} else {
+				state.playlists.push({ id: playlistId, platform, name: playlist.name, tracks: newTracks });
+			}
+			state.activePlaylistId = playlistId;
 			state.useBuiltin = command.clear === false;
-			state.queue = composeQueue(state.custom, state.useBuiltin);
+			state.queue = composeQueue(state);
 			// Random start support: explicit shuffle, or already in shuffle mode.
 			if (command.shuffle === true || state.mode === "shuffle") {
 				state.mode = "shuffle";
 				state.index = state.queue.length > 0 ? Math.floor(Math.random() * state.queue.length) : 0;
 			} else {
-				state.index = 0;
+				state.index = state.queue.indexOf(newTracks[0]);
+				if (state.index < 0) state.index = 0;
 			}
 			state.playing = true;
 			state.version += 1;
 			return {
 				ok: true,
-				message: `已导入${platform === "qq" ? " QQ 音乐" : "网易云"}歌单「${playlist.name}」（${playlist.tracks.length} 首）${state.useBuiltin ? "" : "，默认歌单已隐藏"}，开始播放第一首`
+				message: `已导入${platform === "qq" ? " QQ 音乐" : "网易云"}歌单「${playlist.name}」（${playlist.tracks.length} 首）${existing ? "，已刷新" : ""}${state.useBuiltin ? "" : "，默认歌单已隐藏"}，开始播放第一首`
 			};
+		}
+		case "playlistList": {
+			const lines = state.playlists.length === 0
+				? "（还没有导入任何歌单）"
+				: state.playlists.map((p, i) => {
+					const marker = p.id === state.activePlaylistId ? "▶" : " ";
+					return `${marker} [${i}] ${p.name}（${p.tracks.length} 首 · ${p.platform === "qq" ? "QQ" : "网易云"}）`;
+				}).join("\n");
+			return { ok: true, message: lines };
+		}
+		case "playlistSwitch": {
+			const target = typeof command.id === "string" ? command.id : "";
+			const playlist = state.playlists.find((p) => p.id === target)
+				?? state.playlists[Number(command.index)];
+			if (!playlist) return { ok: false, message: "歌单不存在" };
+			state.activePlaylistId = playlist.id;
+			state.queue = composeQueue(state);
+			state.index = 0;
+			state.playing = true;
+			state.version += 1;
+			return { ok: true, message: `已切换到歌单「${playlist.name}」（${playlist.tracks.length} 首）` };
+		}
+		case "playlistRemove": {
+			const target = typeof command.id === "string" ? command.id : "";
+			const idx = state.playlists.findIndex((p) => p.id === target);
+			if (idx < 0) return { ok: false, message: "歌单不存在" };
+			const removed = state.playlists[idx];
+			state.playlists.splice(idx, 1);
+			if (state.activePlaylistId === removed.id) {
+				state.activePlaylistId = null;
+			}
+			state.queue = composeQueue(state);
+			if (state.index >= state.queue.length) state.index = state.queue.length > 0 ? state.queue.length - 1 : 0;
+			state.version += 1;
+			return { ok: true, message: `已删除歌单「${removed.name}」` };
 		}
 		case "builtin": {
 			state.useBuiltin = command.enable === true;
-			state.queue = composeQueue(state.custom, state.useBuiltin);
+			state.queue = composeQueue(state);
 			state.version += 1;
 			return { ok: true, message: state.useBuiltin ? "已恢复默认歌单" : "已隐藏默认歌单" };
 		}
 		case "reset":
 			state.custom = [];
+			state.playlists = [];
+			state.activePlaylistId = null;
 			state.useBuiltin = true;
-			state.queue = composeQueue(state.custom, state.useBuiltin);
+			state.queue = composeQueue(state);
 			state.index = 0;
 			state.playing = false;
 			state.version += 1;
@@ -1207,7 +1272,7 @@ export function apply(ctx) {
 
 	// Load the configured NetEase playlist as the built-in queue at startup.
 	refreshBuiltinTracks().then(() => {
-		state.queue = composeQueue(state.custom, state.useBuiltin);
+		state.queue = composeQueue(state);
 		if (state.index >= state.queue.length) state.index = 0;
 		state.version += 1;
 	});
@@ -1545,22 +1610,22 @@ export function apply(ctx) {
 	// Agent-facing music control tool.
 	ctx.tools.register(defineTool({
 		name: "music",
-		description: "控制 DeepSeek Harness 的双平台音乐播放器（网易云 + QQ 音乐）：播放/暂停/切歌/调音量/切换循环模式/查看队列/导入歌单/搜歌。用户提到放歌、听歌、切歌、暂停、下一首、导入歌单等场景时使用。",
+		description: "控制 DeepSeek Harness 的双平台音乐播放器（网易云 + QQ 音乐）：播放/暂停/切歌/调音量/切换循环模式/查看队列/导入歌单/切换歌单/搜歌。用户提到放歌、听歌、切歌、暂停、下一首、导入歌单、切歌单等场景时使用。",
 		parameters: {
 			action: {
 				type: "string",
 				required: true,
-				description: "play(播放；query 先匹配本地曲库，未命中自动搜指定平台并播放) / pause / next / prev / list(查看队列) / search(搜歌) / playlist(导入歌单) / add(添加直链) / remove(按索引移除) / volume / mode / builtin(恢复/隐藏默认歌单) / reset"
+				description: "play(播放；query 先匹配本地曲库，未命中自动搜指定平台并播放) / pause / next / prev / list(查看队列) / search(搜歌) / playlist(导入歌单，每个歌单独立保存) / playlistList(查看所有歌单) / playlistSwitch(切换当前歌单，用 id 或 index) / playlistRemove(删除歌单) / add(添加直链) / remove(按索引移除) / volume / mode / builtin(恢复/隐藏默认歌单) / reset"
 			},
 			platform: { type: "string", description: "音乐平台：netease(网易云，默认)/qq(QQ音乐)，配合 play/search/playlist 使用" },
 			query: { type: "string", description: "歌名或歌手关键词，配合 play/search 使用" },
 			url: { type: "string", description: "音频直链(http/https)，配合 add 使用" },
 			title: { type: "string", description: "自定义歌曲标题，配合 add 使用" },
-			id: { type: "string", description: "歌单 id 或分享链接，配合 playlist 使用" },
+			id: { type: "string", description: "歌单 id 或分享链接，配合 playlist 使用；歌单 id 或索引配合 playlistSwitch/playlistRemove 使用" },
 			clear: { type: "boolean", description: "playlist 是否隐藏默认歌单（默认 true，仅保留新歌单）" },
 			shuffle: { type: "boolean", description: "playlist 是否随机播放歌单（默认跟随当前模式；当前已是随机模式则自动随机起播）" },
 			enable: { type: "boolean", description: "builtin 是否恢复默认歌单" },
-			index: { type: "number", description: "队列索引，配合 play/remove 使用" },
+			index: { type: "number", description: "队列索引，配合 play/remove 使用；歌单索引配合 playlistSwitch/playlistRemove 使用" },
 			volume: { type: "number", description: "音量 0-1，配合 volume 使用" },
 			mode: { type: "string", description: "循环模式：list(列表循环)/single(单曲循环)/shuffle(随机)，配合 mode 使用" }
 		},
@@ -1602,7 +1667,7 @@ export function apply(ctx) {
 									url: neteaseStreamUrl(song.id)
 								};
 							state.custom.push(trackRow);
-							state.queue = composeQueue(state.custom, state.useBuiltin);
+							state.queue = composeQueue(state);
 							state.index = state.queue.length - 1;
 							return `本地曲库无匹配，已从${platform === "qq" ? "QQ 音乐" : "网易云"}搜索并加入：▶ 「${song.name} — ${song.artist}」（自动播放）`;
 						}
@@ -1662,6 +1727,22 @@ export function apply(ctx) {
 					const id = platform === "qq" ? parseQQPlaylistId(args.id ?? args.url) : parsePlaylistId(args.id ?? args.url);
 					if (id === void 0) return `请提供${platform === "qq" ? " QQ 音乐" : "网易云"}歌单 id 或分享链接（如 ${platform === "qq" ? "https://y.qq.com/n/ryqq/playlist/xxx" : "https://music.163.com/playlist?id=xxx"}）`;
 					const result = await applyCommand(state, { action: "importPlaylist", id, platform, clear: args.clear !== false, shuffle: args.shuffle === true });
+					return result.message;
+				}
+				case "playlistList": {
+					const result = await applyCommand(state, { action: "playlistList" });
+					return result.message;
+				}
+				case "playlistSwitch": {
+					const target = typeof args.id === "string" ? args.id : String(args.index ?? "");
+					if (target === "") return "请提供要切换的歌单 id（可用 playlistList 查看）或索引 index";
+					const result = await applyCommand(state, { action: "playlistSwitch", id: target, index: args.index });
+					return result.message;
+				}
+				case "playlistRemove": {
+					const target = typeof args.id === "string" ? args.id : String(args.index ?? "");
+					if (target === "") return "请提供要删除的歌单 id 或索引 index";
+					const result = await applyCommand(state, { action: "playlistRemove", id: target, index: args.index });
 					return result.message;
 				}
 				case "builtin": {
