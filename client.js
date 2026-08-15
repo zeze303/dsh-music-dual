@@ -30,9 +30,9 @@ window.__ModuleLoader__.load({
 			".dshm-header-mini .dshm-title{font-size:12px;line-height:16px}",
 			".dshm-head-actions{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:120px;height:34px}",
 			".dshm-head-group{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none}",
-			// 视图导航行（封面和歌名下方、进度条上方）
-			".dshm-nav{display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px 2px}",
-			".dshm-nav-btn{width:auto;min-width:34px;padding:0 8px;border-radius:9px;font-size:12px;gap:4px}",
+			// 视图导航行（封面和歌名下方、进度条上方）—— 水平排列
+			".dshm-nav{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;padding:8px 12px 2px}",
+			".dshm-nav-btn{flex:none;width:34px;height:26px;min-width:34px;padding:0;border-radius:9px;font-size:12px}",
 			".dshm-nav .dshm-btn-active{background:rgba(255,255,255,0.28);color:#fff}",
 			".dshm-head-group-in{opacity:1;pointer-events:auto}",
 			".dshm-head-group-out{opacity:0;pointer-events:none;transition:opacity .18s ease-out}",
