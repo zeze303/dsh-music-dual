@@ -225,6 +225,10 @@ window.__ModuleLoader__.load({
 				["path", { d: "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" }],
 				["line", { x1: 12, y1: 9, x2: 12, y2: 13 }],
 				["line", { x1: 12, y1: 17, x2: 12.01, y2: 17 }]
+			],
+			user: [
+				["path", { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }],
+				["circle", { cx: 12, cy: 7, r: 4 }]
 			]
 		};
 
@@ -924,6 +928,16 @@ window.__ModuleLoader__.load({
 									});
 								})
 							}, h(Icon, { name: searchMode ? "arrowLeft" : "search", size: 14 })),
+								h("button", {
+									className: "dshm-btn dshm-vt-fade" + ((loginStatus.netease && loginStatus.netease.loggedIn) || (loginStatus.qq && loginStatus.qq.loggedIn) ? " dshm-btn-active" : ""),
+									title: "登录 / 账号（扫码或粘贴 cookie）",
+									onClick: handleClick(function (event) {
+										event.stopPropagation();
+										setSearchMode(true);
+										setPanelMode("login");
+										refreshLoginStatus();
+									})
+								}, h(Icon, { name: "user", size: 14 })),
 							h("button", {
 								className: "dshm-btn dshm-vt-fade",
 								title: "折叠",
