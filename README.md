@@ -9,13 +9,16 @@ A floating music player plugin for DeepSeek Harness with dual-platform support �
 ## 特性 Features
 
 - **悬浮播放器**：右下角深色毛玻璃小卡片，**可拖动记忆位置**，展开/收起带物理曲线动画；播放/暂停、上下首、可拖动进度条、音量、列表循环/单曲循环/随机、播放列表
+- **UI 布局**：顶部视图按钮行（播放列表 / 搜索 / 歌单 / 登录 / 折叠）→ 封面 + 居中歌名（**过长自动滚动**，折叠时挨着封面、不挤按钮）→ 进度条 + 控制 + 音量 → 内容区四视图
+- **多歌单独立管理**：每个导入的歌单**独立保存**（可导入多个网易云/QQ 歌单），歌单列表点选切换、删除，互不合并
+- **弹窗内登录**：🔑 登录视图——网易云**二维码扫码**（官方接口）或粘贴 cookie；QQ 音乐打开官方登录页 + 粘贴 cookie（需 uin + qm_keyst 播放票据）
+- **完整状态持久化**：播放队列、导入的歌单、音量、循环模式、当前歌曲与播放进度都保存到 `$DSH_HOME/dsh-music-state.json`，**重启后原样恢复**（登录 cookie 另有独立持久化）
 - **双平台音乐接入**：
   - **网易云**：搜索、歌单导入、三级流解析——优先 `NeteaseCloudMusicApi` 包（cloudsearch / song_url_v1 / playlist_track_all / login_status），包缺失时回退匿名 web API + Meting + outer-link
   - **QQ 音乐**：搜索（安卓端 `musics.fcg` + `zzc` SHA1 混淆签名，smartbox 免签名回退）、歌单导入（`fcg_ucc_getcdinfo_byids_cp`）、播放 URL（`musicu.fcg` → `vkey.GetVkeyServer/CgiGetVkey`，sip+purl 拼接）、登录验证（`fcg_get_profile_homepage`）
 - **8KB Range 探测验真**：两平台解析出的播放 URL 都会先拉取前 8KB 校验（状态码 + content-type + 音频 magic），避免拿到 404/HTML 错误页
 - **登录态解锁**：网易云 `DSH_MUSIC_COOKIE`（MUSIC_U）、QQ 音乐 `DSH_MUSIC_QQ_COOKIE`（uin + qm_keyst），配置后可解锁会员/VIP 曲目的完整音频
-- **agent 音乐工具**：对模型说"放首歌 / 把我的歌单放进去 / QQ 音乐搜一下"即可——`music` 工具支持 `platform` 参数双平台搜索/导入/播放
-- **状态同步**：浏览器播放器与 host 状态机通过 REST 同步（`/dsh-music/state` 轮询 + `/dsh-music/command` 控制），无持久化
+- **agent 音乐工具**：对模型说"放首歌 / 把我的歌单放进去 / QQ 音乐搜一下 / 切换到我的歌单"即可——`music` 工具支持 `platform` 参数双平台搜索/导入/播放/切换歌单
 - **零外部前端依赖**：播放器为手写 `__ModuleLoader__` 格式，内联 SVG 图标，不依赖 CDN
 
 ## 安装 Install
@@ -65,11 +68,12 @@ dsh --profile web
 ## 使用 Usage
 
 - 点右下角 🎵 卡片展开播放器；拖动卡片顶部任意位置可移动（位置自动记忆）；点右上角箭头展开/收起（带动画）
-- 展开后头部四个视图按钮：**播放列表 / 搜索 / 歌单管理 / 登录**
+- 展开后**顶部视图按钮行**：**播放列表 / 搜索 / 歌单管理 / 登录 / 折叠**
+- **播放列表**：队列上方显示已导入歌单 chips（点选切换 / 删除），下方为当前播放队列；歌名过长会水平滚动显示
 - **搜索**：顶部 tab 切换 **网易云 / QQ 音乐**，输入歌名/歌手回车搜索，点 + 加入播放列表（加入"散曲"）
-- **歌单管理**：粘贴歌单链接或 id 导入（**每个歌单独立保存**，可导入多个歌单混合播放）；歌单列表点选切换、点 × 删除
-- **播放列表**：队列上方显示已导入歌单 chips（点选切换 / 删除），下方为当前播放队列
-- **登录**：网易云可**二维码扫码**或粘贴 cookie；QQ 音乐打开官方登录页 + 粘贴 cookie（需 uin + qm_keyst）
+- **歌单管理**：粘贴歌单链接或 id 导入（**每个歌单独立保存**，可导入多个歌单切换播放）；歌单列表点选切换、点 × 删除
+- **登录**：网易云可**二维码扫码**（弹窗内直接显示二维码）或粘贴 cookie；QQ 音乐打开官方登录页 + 粘贴 cookie（需 uin + qm_keyst）
+- **状态自动保存**：歌单、音量、模式、当前歌曲与进度重启后自动恢复，无需手动操作
 - 对话里直接说「放首歌 / 放一首周杰伦的晴天 / QQ 音乐搜一下晴天 / 导入我的歌单 / 切换到我的歌单 / 下一首 / 暂停 / 随机播放 / 音量调到 50%」，agent 会调用 `music` 工具控制播放器
 
 ## agent music 工具
@@ -91,15 +95,22 @@ dsh --profile web
 
 | 端点 | 说明 |
 |---|---|
-| `GET /dsh-music/state` | 播放器状态快照 |
-| `POST /dsh-music/command` | 播放意图（`importPlaylist` 支持 `platform`） |
-| `GET /dsh-music/netease/{search,playlist,stream,login}` | 网易云搜索/歌单/音频代理/登录态 |
+| `GET /dsh-music/state` | 播放器状态快照（含 playlists / activePlaylistId / positionMs） |
+| `POST /dsh-music/command` | 播放意图（`importPlaylist` 支持 `platform`；`playlistList/Switch/Remove` 管理歌单；`position` 上报播放进度） |
+| `GET /dsh-music/netease/{search,playlist,stream,login,qr-key,qr-create,qr-check}` | 网易云搜索/歌单/音频代理/登录态/二维码 |
 | `GET /dsh-music/qq/{search,playlist,stream,login}` | QQ 音乐搜索/歌单/音频代理/登录态 |
+| `POST /dsh-music/{netease,qq}/login/cookie` | 设置登录 cookie（持久化到 `$DSH_HOME/dsh-music-cookies.json`） |
+
+## 状态持久化
+
+- 播放状态保存到 `$DSH_HOME/dsh-music-state.json`（防抖写入）：音量、循环模式、导入的歌单、当前歌曲索引、播放进度
+- 登录 cookie 保存到 `$DSH_HOME/dsh-music-cookies.json`（环境变量仍优先）
+- 两者都在重启 `dsh web` 后自动恢复
 
 ## 目录结构 Structure
 
-- `index.js` — host 端：状态机、REST 路由、`music` 工具、双平台解析（NeteaseCloudMusicApi 优先 + 回退、QQ zzc 签名/vkey）、8KB 探测
-- `client.js` — 浏览器端：悬浮播放器（`__ModuleLoader__` 格式、平台切换、零外部依赖）
+- `index.js` — host 端：状态机、REST 路由、`music` 工具、双平台解析（NeteaseCloudMusicApi 优先 + 回退、QQ zzc 签名/vkey）、8KB 探测、状态持久化
+- `client.js` — 浏览器端：悬浮播放器（`__ModuleLoader__` 格式、四视图 UI、Marquee 滚动、平台切换、零外部依赖）
 - `cordis.patch.yml` — bundle 层声明
 - `package.json` — 包元数据（依赖 `NeteaseCloudMusicApi`）
 
