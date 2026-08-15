@@ -84,7 +84,19 @@ window.__ModuleLoader__.load({
 			".dshm-tab-active{background:rgba(255,255,255,0.26);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.22)}",
 			".dshm-tag{flex:none;font-size:8.5px;line-height:12px;padding:0 4px;border-radius:5px;color:#fff;background:rgba(255,255,255,0.18)}",
 			".dshm-tag-qq{background:rgba(78,186,96,0.55)}",
-			".dshm-tag-netease{background:rgba(226,54,64,0.6)}"
+			".dshm-tag-netease{background:rgba(226,54,64,0.6)}",
+			// 登录面板
+			".dshm-login{display:flex;flex-direction:column;gap:6px;margin-top:6px}",
+			".dshm-login-title{font-size:11px;font-weight:600;color:rgba(255,255,255,0.85);display:flex;align-items:center;gap:6px}",
+			".dshm-login-status{font-size:10px;line-height:14px;padding:5px 8px;border-radius:8px;background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.75)}",
+			".dshm-login-ok{background:rgba(124,255,178,0.14);color:#7cffb2}",
+			".dshm-login-no{background:rgba(255,107,107,0.12);color:#ffc9cd}",
+			".dshm-qr{display:flex;align-items:center;justify-content:center;padding:8px 0}",
+			".dshm-qr img{width:150px;height:150px;border-radius:10px;background:#fff;padding:6px;image-rendering:pixelated}",
+			".dshm-qr-tip{font-size:10px;color:rgba(255,255,255,0.6);text-align:center;line-height:14px}",
+			".dshm-login-actions{display:flex;gap:6px}",
+			".dshm-btn-login{flex:1;border:none;border-radius:9px;background:rgba(255,255,255,0.16);color:#fff;font-size:11px;padding:5px 0;cursor:pointer;text-align:center}",
+			".dshm-btn-login:hover{background:rgba(255,255,255,0.26)}"
 		].join("");
 
 		/** Inject the player stylesheet once. */
@@ -272,6 +284,21 @@ window.__ModuleLoader__.load({
 			return "/dsh-music/netease/stream?id=" + encodeURIComponent(song.id);
 		}
 
+		/** Fetch one platform's login status. */
+		function fetchLoginStatus(platform) {
+			return fetch("/dsh-music/" + platform + "/login", { cache: "no-store" })
+				.then(function (res) { return res.json(); });
+		}
+
+		/** POST a cookie to the host for one platform. */
+		function postLoginCookie(platform, cookie) {
+			return fetch("/dsh-music/" + platform + "/login/cookie", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ cookie: cookie })
+			}).then(function (res) { return res.json(); });
+		}
+
 		/**
 		 * The floating player. Compact and draggable: the mini bar
 		 * collapses into a card with progress, volume, modes, the queue, and a
@@ -292,12 +319,23 @@ window.__ModuleLoader__.load({
 			var [duration, setDuration] = react.useState(0);
 			var [error, setError] = react.useState(null);
 			var [searchMode, setSearchMode] = react.useState(false);
+			var [panelMode, setPanelMode] = react.useState("search"); // search | login
 			var [searchPlatform, setSearchPlatform] = react.useState("netease");
 			var [searchQuery, setSearchQuery] = react.useState("");
 			var [searching, setSearching] = react.useState(false);
 			var [results, setResults] = react.useState(null);
 			var [searchError, setSearchError] = react.useState(null);
 			var [playlistDraft, setPlaylistDraft] = react.useState("");
+			// ── login panel state ──
+			var [loginTab, setLoginTab] = react.useState("netease");
+			var [loginStatus, setLoginStatus] = react.useState({ netease: null, qq: null });
+			var [qrImg, setQrImg] = react.useState(null);
+			var [qrKey, setQrKey] = react.useState(null);
+			var [qrState, setQrState] = react.useState("idle"); // idle | waiting | scanned | ok | expired | error
+			var [neteaseCookieDraft, setNeteaseCookieDraft] = react.useState("");
+			var [qqCookieDraft, setQqCookieDraft] = react.useState("");
+			var [loginBusy, setLoginBusy] = react.useState(false);
+			var [loginMsg, setLoginMsg] = react.useState(null);
 
 			// Restore the saved position, or fall back to the bottom-right corner.
 			var restorePos = function () {
@@ -461,6 +499,18 @@ window.__ModuleLoader__.load({
 				poll();
 				var timer = setInterval(poll, POLL_MS);
 				return function () { alive = false; clearInterval(timer); };
+			}, []);
+
+			// Fetch both platforms' login status on mount (and every 30s).
+			react.useEffect(function () {
+				refreshLoginStatus();
+				var timer = setInterval(refreshLoginStatus, 30000);
+				return function () { clearInterval(timer); };
+			}, []);
+
+			// Clear the QR poll when the login panel unmounts (component cleanup).
+			react.useEffect(function () {
+				return function () { clearQrPoll(); };
 			}, []);
 
 			// Error toast auto-dismisses after a few seconds.
@@ -701,6 +751,114 @@ window.__ModuleLoader__.load({
 				setResults(null);
 				setSearchError(null);
 			};
+			// ── login panel logic ──
+			var refreshLoginStatus = function () {
+				fetchLoginStatus("netease").then(function (s) {
+					setLoginStatus(function (prev) { return { ...prev, netease: s }; });
+				}).catch(function () {});
+				fetchLoginStatus("qq").then(function (s) {
+					setLoginStatus(function (prev) { return { ...prev, qq: s }; });
+				}).catch(function () {});
+			};
+			var qrPollTimerRef = react.useRef(null);
+			var clearQrPoll = function () {
+				if (qrPollTimerRef.current) { clearInterval(qrPollTimerRef.current); qrPollTimerRef.current = null; }
+			};
+			var qrKeyRef = react.useRef(null);
+			qrKeyRef.current = qrKey;
+			var startQrLogin = function () {
+				setLoginBusy(true);
+				setLoginMsg(null);
+				clearQrPoll();
+				setQrImg(null);
+				setQrKey(null);
+				setQrState("waiting");
+				fetch("/dsh-music/netease/login/qr-key", { cache: "no-store" })
+					.then(function (res) { return res.json(); })
+					.then(function (data) {
+						if (!data || !data.key) {
+							setQrState("error");
+							setLoginMsg(String((data && data.error) || "获取二维码失败"));
+							setLoginBusy(false);
+							return;
+						}
+						qrKeyRef.current = data.key;
+						setQrKey(data.key);
+						return fetch("/dsh-music/netease/login/qr-create?key=" + encodeURIComponent(data.key), { cache: "no-store" })
+							.then(function (res) { return res.json(); });
+					})
+					.then(function (qr) {
+						if (!qr || !qr.img) {
+							setQrState("error");
+							setLoginMsg(String((qr && qr.error) || "生成二维码失败"));
+							setLoginBusy(false);
+							return;
+						}
+						setQrImg(qr.img);
+						setLoginBusy(false);
+						qrPollTimerRef.current = setInterval(function () {
+							var key = qrKeyRef.current;
+							if (!key) return;
+							fetch("/dsh-music/netease/login/qr-check?key=" + encodeURIComponent(key), { cache: "no-store" })
+								.then(function (res) { return res.json(); })
+								.then(function (s) {
+									var code = Number(s.code || 0);
+									if (code === 800) { clearQrPoll(); setQrState("expired"); setLoginMsg("二维码已过期，请重新生成"); }
+									else if (code === 802) setQrState("scanned");
+									else if (code === 803) {
+										clearQrPoll();
+										setQrState("ok");
+										setLoginMsg(s.nickname ? "已登录：" + s.nickname : "登录成功");
+										refreshLoginStatus();
+									}
+								}).catch(function () {});
+						}, 2500);
+					})
+					.catch(function () {
+						setQrState("error");
+						setLoginMsg("二维码登录失败（网络或服务问题）");
+						setLoginBusy(false);
+					});
+			};
+			var cancelQrLogin = function () {
+				clearQrPoll();
+				setQrImg(null);
+				setQrKey(null);
+				setQrState("idle");
+				setLoginMsg(null);
+			};
+			var saveNeteaseCookie = function () {
+				var c = neteaseCookieDraft.trim();
+				if (!c) { setLoginMsg("请先粘贴网易云 cookie"); return; }
+				setLoginBusy(true);
+				setLoginMsg(null);
+				postLoginCookie("netease", c).then(function (r) {
+					setLoginBusy(false);
+					if (r.ok) {
+						setLoginMsg(r.nickname ? "网易云登录成功：" + r.nickname : "网易云 cookie 已保存");
+						setNeteaseCookieDraft("");
+						refreshLoginStatus();
+					} else {
+						setLoginMsg(String(r.error || "保存失败"));
+					}
+				}).catch(function () { setLoginBusy(false); setLoginMsg("保存失败（网络或服务问题）"); });
+			};
+			var saveQqCookie = function () {
+				var c = qqCookieDraft.trim();
+				if (!c) { setLoginMsg("请先粘贴 QQ 音乐 cookie"); return; }
+				setLoginBusy(true);
+				setLoginMsg(null);
+				postLoginCookie("qq", c).then(function (r) {
+					setLoginBusy(false);
+					if (r.ok) {
+						setLoginMsg(r.nickname ? "QQ 音乐登录成功：" + r.nickname : "QQ 音乐 cookie 已保存");
+						setQqCookieDraft("");
+						refreshLoginStatus();
+					} else {
+						setLoginMsg(String(r.error || "保存失败"));
+					}
+				}).catch(function () { setLoginBusy(false); setLoginMsg("保存失败（网络或服务问题）"); });
+			};
 
 			var track = remote && remote.queue[remote.index] ? remote.queue[remote.index] : null;
 			var modeLabel = { list: "列表循环", single: "单曲循环", shuffle: "随机播放" };
@@ -833,16 +991,134 @@ window.__ModuleLoader__.load({
 							? [
 								h("div", { className: "dshm-tabs" }, [
 									h("button", {
-										className: "dshm-tab" + (searchPlatform === "netease" ? " dshm-tab-active" : ""),
-										title: "网易云音乐",
-										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("netease"); })
+										className: "dshm-tab" + (searchPlatform === "netease" && panelMode === "search" ? " dshm-tab-active" : ""),
+										title: "网易云音乐搜索",
+										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("netease"); setPanelMode("search"); })
 									}, "网易云"),
 									h("button", {
-										className: "dshm-tab" + (searchPlatform === "qq" ? " dshm-tab-active" : ""),
-										title: "QQ 音乐",
-										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("qq"); })
-									}, "QQ 音乐")
+										className: "dshm-tab" + (searchPlatform === "qq" && panelMode === "search" ? " dshm-tab-active" : ""),
+										title: "QQ 音乐搜索",
+										onClick: handleClick(function (event) { event.stopPropagation(); switchPlatform("qq"); setPanelMode("search"); })
+									}, "QQ 音乐"),
+									h("button", {
+										className: "dshm-tab" + (panelMode === "login" ? " dshm-tab-active" : ""),
+										title: "登录 / 账号（扫码或粘贴 cookie）",
+										onClick: handleClick(function (event) {
+											event.stopPropagation();
+											setPanelMode("login");
+											refreshLoginStatus();
+										})
+									}, "🔑 登录")
 								]),
+								panelMode === "login"
+									? [
+										h("div", { className: "dshm-tabs" }, [
+											h("button", {
+												className: "dshm-tab" + (loginTab === "netease" ? " dshm-tab-active" : ""),
+												title: "网易云登录",
+												onClick: handleClick(function (event) { event.stopPropagation(); setLoginTab("netease"); })
+											}, "网易云"),
+											h("button", {
+												className: "dshm-tab" + (loginTab === "qq" ? " dshm-tab-active" : ""),
+												title: "QQ 音乐登录",
+												onClick: handleClick(function (event) { event.stopPropagation(); setLoginTab("qq"); })
+											}, "QQ 音乐")
+										]),
+										loginTab === "netease"
+											? h("div", { className: "dshm-login" }, [
+												h("div", { className: "dshm-login-title" }, "网易云音乐登录"),
+												h("div", {
+													className: "dshm-login-status" + (loginStatus.netease && loginStatus.netease.loggedIn ? " dshm-login-ok" : " dshm-login-no")
+												}, loginStatus.netease
+													? (loginStatus.netease.loggedIn
+														? "✓ 已登录：" + (loginStatus.netease.nickname || "网易云用户")
+														: (loginStatus.netease.hasCookie ? "⚠ cookie 已设置但登录态失效，请重新登录" : "未登录"))
+													: "查询登录状态…"),
+												qrImg
+													? h("div", null, [
+														h("div", { className: "dshm-qr" }, h("img", { src: "data:image/png;base64," + qrImg, alt: "扫码登录" })),
+														h("div", { className: "dshm-qr-tip" },
+															qrState === "scanned" ? "已扫码，请在手机确认" :
+															qrState === "ok" ? "登录成功！" :
+															qrState === "expired" ? "二维码已过期，点击重新生成" :
+															"打开网易云音乐 App 扫码登录"),
+														h("div", { className: "dshm-login-actions" }, [
+															h("button", { className: "dshm-btn-login", onClick: handleClick(function () { startQrLogin(); }) }, "重新生成"),
+															h("button", { className: "dshm-btn-login", onClick: handleClick(cancelQrLogin) }, "取消")
+														])
+													])
+													: h("div", { className: "dshm-login-actions" }, [
+														h("button", {
+															className: "dshm-btn-login",
+															disabled: loginBusy,
+															onClick: handleClick(function (event) { event.stopPropagation(); startQrLogin(); })
+														}, loginBusy ? "生成中…" : "扫码登录"),
+														h("button", {
+															className: "dshm-btn-login",
+															onClick: handleClick(function (event) { event.stopPropagation(); setNeteaseCookieDraft(""); setLoginMsg(null); })
+														}, "手动粘贴 cookie")
+													]),
+												h("div", { className: "dshm-search", style: { marginTop: 2 } }, [
+													h("input", {
+														className: "dshm-input",
+														placeholder: "MUSIC_U=...; __csrf=...",
+														title: "粘贴网易云登录 cookie（MUSIC_U）",
+														value: neteaseCookieDraft,
+														onChange: function (event) { setNeteaseCookieDraft(event.target.value); },
+														onKeyDown: function (event) { if (event.key === "Enter") saveNeteaseCookie(); }
+													}),
+													h("button", {
+														className: "dshm-btn dshm-btn-primary",
+														title: "保存 cookie",
+														disabled: loginBusy,
+														onClick: handleClick(saveNeteaseCookie)
+													}, h(Icon, { name: "import_", size: 13 }))
+												]),
+												loginMsg ? h("div", { className: "dshm-note", style: { color: "rgba(124,255,178,0.9)" } }, loginMsg) : null
+											])
+											: h("div", { className: "dshm-login" }, [
+												h("div", { className: "dshm-login-title" }, "QQ 音乐登录"),
+												h("div", {
+													className: "dshm-login-status" + (loginStatus.qq && loginStatus.qq.loggedIn ? " dshm-login-ok" : " dshm-login-no")
+												}, loginStatus.qq
+													? (loginStatus.qq.loggedIn
+														? "✓ 已登录：" + (loginStatus.qq.nickname || "QQ 音乐用户") + (loginStatus.qq.playbackKeyReady ? "（播放授权就绪）" : "（⚠ 缺播放票据）")
+														: (loginStatus.qq.hasCookie ? "⚠ cookie 已设置但登录态失效" : "未登录"))
+													: "查询登录状态…"),
+												h("div", { className: "dshm-login-actions" }, [
+													h("button", {
+														className: "dshm-btn-login",
+														onClick: handleClick(function (event) {
+															event.stopPropagation();
+															window.open("https://y.qq.com/n/ryqq/profile", "_blank");
+														})
+													}, "打开官方登录页"),
+													h("button", {
+														className: "dshm-btn-login",
+														onClick: handleClick(function (event) { event.stopPropagation(); window.open("https://y.qq.com/n/ryqq/player", "_blank"); })
+													}, "打开播放器页")
+												]),
+												h("div", { className: "dshm-note" }, "QQ 音乐没有可编程扫码接口：请在官方登录页扫码登录后，访问播放器页生成播放票据，再把 cookie 粘贴到这里（需 uin + qm_keyst）"),
+												h("div", { className: "dshm-search", style: { marginTop: 2 } }, [
+													h("input", {
+														className: "dshm-input",
+														placeholder: "uin=...; qm_keyst=...",
+														title: "粘贴 QQ 音乐 cookie（uin + qm_keyst）",
+														value: qqCookieDraft,
+														onChange: function (event) { setQqCookieDraft(event.target.value); },
+														onKeyDown: function (event) { if (event.key === "Enter") saveQqCookie(); }
+													}),
+													h("button", {
+														className: "dshm-btn dshm-btn-primary",
+														title: "保存 cookie",
+														disabled: loginBusy,
+														onClick: handleClick(saveQqCookie)
+													}, h(Icon, { name: "import_", size: 13 }))
+												]),
+												loginMsg ? h("div", { className: "dshm-note", style: { color: "rgba(124,255,178,0.9)" } }, loginMsg) : null
+											])
+									]
+									: [
 								h("div", { className: "dshm-search" }, [
 									h("input", {
 										className: "dshm-input",
@@ -900,9 +1176,10 @@ window.__ModuleLoader__.load({
 													]);
 												})
 								),
-								h("div", { className: "dshm-note" }, "受版权/VIP 限制的歌曲可能无法播放" + (searchPlatform === "qq" && !(remote && remote.qqLogin) ? "；QQ 音乐播放需配置 DSH_MUSIC_QQ_COOKIE 登录态" : ""))
-							]
-							: [
+								h("div", { className: "dshm-note" }, "受版权/VIP 限制的歌曲可能无法播放" + (searchPlatform === "qq" && !(loginStatus.qq && loginStatus.qq.loggedIn) ? "；QQ 音乐完整播放需先登录（🔑 登录 tab）" : ""))
+									]
+									]
+									: [
 								h("div", { className: "dshm-list", onWheel: stopListWheel },
 									remote && remote.queue.length === 0
 										? h("div", { className: "dshm-empty" }, "播放列表为空")

@@ -29,6 +29,8 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
 export const name = "dsh-music-dual";
 export const inject = ["webServer", "tools"];
@@ -42,10 +44,34 @@ const QQ_ANDROID_UA = "QQMusic 14090508(android 12)";
 const NETEASE_REFERER = "https://music.163.com/";
 const QQ_REFERER = "https://y.qq.com/";
 
-/** Optional logged-in NetEase cookie (e.g. MUSIC_U=...) that unlocks full tracks. */
-const DSH_MUSIC_COOKIE = process.env.DSH_MUSIC_COOKIE ?? "";
-/** Optional logged-in QQ Music cookie (uin=...; qm_keyst=...) that unlocks member tracks. */
-const DSH_MUSIC_QQ_COOKIE = process.env.DSH_MUSIC_QQ_COOKIE ?? "";
+/** Runtime NetEase cookie (e.g. MUSIC_U=...). Starts from DSH_MUSIC_COOKIE,
+ * may be replaced by QR/manual login in the browser and persisted to DSH_HOME. */
+let neteaseCookie = process.env.DSH_MUSIC_COOKIE ?? "";
+/** Runtime QQ Music cookie (uin=...; qm_keyst=...). Same lifecycle as above. */
+let qqCookie = process.env.DSH_MUSIC_QQ_COOKIE ?? "";
+/** Cookie persistence file under DSH_HOME (keeps runtime logins across restarts). */
+const COOKIE_STORE_FILE = process.env.DSH_HOME ? join(process.env.DSH_HOME, "dsh-music-cookies.json") : "";
+/** Refresh the module-level cookie from the persisted store (environment wins). */
+function loadCookies() {
+	if (COOKIE_STORE_FILE === "") return;
+	try {
+		const raw = JSON.parse(readFileSync(COOKIE_STORE_FILE, "utf8"));
+		if (process.env.DSH_MUSIC_COOKIE ?? "" === "") neteaseCookie = typeof raw.netease === "string" ? raw.netease : neteaseCookie;
+		if (process.env.DSH_MUSIC_QQ_COOKIE ?? "" === "") qqCookie = typeof raw.qq === "string" ? raw.qq : qqCookie;
+	} catch {
+		/* no store yet */
+	}
+}
+/** Persist the module-level cookies (runtime logins survive restarts). */
+function saveCookies() {
+	if (COOKIE_STORE_FILE === "") return;
+	try {
+		mkdirSync(process.env.DSH_HOME, { recursive: true });
+		writeFileSync(COOKIE_STORE_FILE, JSON.stringify({ netease: neteaseCookie, qq: qqCookie }, null, 2), "utf8");
+	} catch {
+		/* store write failure is non-fatal */
+	}
+}
 
 /** A streamable NetEase track URL served by this plugin. */
 const neteaseStreamUrl = (id) => `/dsh-music/netease/stream?id=${encodeURIComponent(id)}`;
@@ -405,7 +431,7 @@ async function neteaseSearch(query, limit = 20) {
 	const api = await neteaseApiModule();
 	if (api && typeof api.cloudsearch === "function") {
 		try {
-			const result = await api.cloudsearch({ keywords: query, limit, offset: 0, cookie: DSH_MUSIC_COOKIE });
+			const result = await api.cloudsearch({ keywords: query, limit, offset: 0, cookie: neteaseCookie });
 			const songs = result?.body?.result?.songs;
 			if (Array.isArray(songs)) {
 				rows = songs.map(mapNeteaseSong).filter((s) => s.id);
@@ -457,8 +483,8 @@ async function neteasePlaylist(id) {
 	if (api && typeof api.playlist_track_all === "function") {
 		try {
 			const [metaResult, tracksResult] = await Promise.allSettled([
-				api.playlist_detail({ id, cookie: DSH_MUSIC_COOKIE }),
-				api.playlist_track_all({ id, limit: 500, offset: 0, cookie: DSH_MUSIC_COOKIE })
+				api.playlist_detail({ id, cookie: neteaseCookie }),
+				api.playlist_track_all({ id, limit: 500, offset: 0, cookie: neteaseCookie })
 			]);
 			if (metaResult.status === "fulfilled") {
 				name = String(metaResult.value?.body?.playlist?.name ?? "");
@@ -565,12 +591,12 @@ async function resolveStreamUrl(id) {
 		const attempts = [];
 		if (typeof api.song_url_v1 === "function") {
 			for (const level of ["standard", "higher", "exhigh", "lossless"]) {
-				attempts.push(() => api.song_url_v1({ id, level, cookie: DSH_MUSIC_COOKIE }));
+				attempts.push(() => api.song_url_v1({ id, level, cookie: neteaseCookie }));
 			}
 		}
 		if (typeof api.song_url === "function") {
 			for (const br of [320000, 192000, 128000]) {
-				attempts.push(() => api.song_url({ id, br, cookie: DSH_MUSIC_COOKIE }));
+				attempts.push(() => api.song_url({ id, br, cookie: neteaseCookie }));
 			}
 		}
 		for (const attempt of attempts) {
@@ -609,7 +635,7 @@ async function neteaseLoginStatus() {
 	const key = "nlogin";
 	const cached = neteaseCache.get(key);
 	if (cached !== void 0 && Date.now() - cached.at < 120_000) return cached.value;
-	const hasCookie = DSH_MUSIC_COOKIE !== "";
+	const hasCookie = neteaseCookie !== "";
 	const value = { loggedIn: false, hasCookie, userId: "", nickname: "" };
 	if (!hasCookie) {
 		neteaseCache.set(key, { value, at: Date.now() });
@@ -618,13 +644,13 @@ async function neteaseLoginStatus() {
 	const api = await neteaseApiModule();
 	try {
 		if (api && typeof api.login_status === "function") {
-			const result = await api.login_status({ cookie: DSH_MUSIC_COOKIE });
+			const result = await api.login_status({ cookie: neteaseCookie });
 			const profile = result?.body?.data?.profile || {};
 			value.loggedIn = result?.body?.data?.account !== null && !!profile?.userId;
 			value.userId = String(profile?.userId ?? "");
 			value.nickname = String(profile?.nickname ?? "");
 		} else if (api && typeof api.user_account === "function") {
-			const result = await api.user_account({ cookie: DSH_MUSIC_COOKIE });
+			const result = await api.user_account({ cookie: neteaseCookie });
 			const profile = result?.body?.profile || {};
 			value.loggedIn = !!profile?.userId;
 			value.userId = String(profile?.userId ?? "");
@@ -661,7 +687,7 @@ function parseCookieString(cookieText) {
 
 /** The configured QQ Music cookie as an object. */
 function qqCookieObject() {
-	return parseCookieString(DSH_MUSIC_QQ_COOKIE);
+	return parseCookieString(qqCookie);
 }
 
 /** Extract the QQ account uin from the cookie (digits only). */
@@ -752,7 +778,7 @@ async function qqMusicRequest(payload, useCookie) {
 		"content-type": "application/json;charset=UTF-8",
 		"content-length": Buffer.byteLength(body)
 	};
-	if (useCookie && DSH_MUSIC_QQ_COOKIE !== "") headers.cookie = DSH_MUSIC_QQ_COOKIE;
+	if (useCookie && qqCookie !== "") headers.cookie = qqCookie;
 	const res = await fetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
 		method: "POST",
 		headers,
@@ -920,7 +946,7 @@ async function qqPlaylist(id) {
 	u.searchParams.set("platform", "yqq.json");
 	u.searchParams.set("needNewCode", "0");
 	const headers = { "user-agent": BROWSER_UA, referer: "https://y.qq.com/n/yqq/playlist" };
-	if (DSH_MUSIC_QQ_COOKIE !== "") headers.cookie = DSH_MUSIC_QQ_COOKIE;
+	if (qqCookie !== "") headers.cookie = qqCookie;
 	const res = await fetch(u, { headers, signal: AbortSignal.timeout(15000) });
 	if (!res.ok) throw new Error(`QQ playlist HTTP ${res.status}`);
 	const json = await res.json();
@@ -988,7 +1014,7 @@ async function qqLoginStatus() {
 	const key = "qlogin";
 	const cached = qqCache.get(key);
 	if (cached !== void 0 && Date.now() - cached.at < 120_000) return cached.value;
-	const hasCookie = DSH_MUSIC_QQ_COOKIE !== "";
+	const hasCookie = qqCookie !== "";
 	const uin = qqCookieUin();
 	const playbackKeyReady = qqCookiePlaybackKey() !== "";
 	const value = { loggedIn: false, hasCookie, uin, nickname: "", playbackKeyReady };
@@ -1011,7 +1037,7 @@ async function qqLoginStatus() {
 		u.searchParams.set("platform", "yqq.json");
 		u.searchParams.set("needNewCode", "0");
 		const res = await fetch(u, {
-			headers: { "user-agent": BROWSER_UA, referer: QQ_REFERER, cookie: DSH_MUSIC_QQ_COOKIE },
+			headers: { "user-agent": BROWSER_UA, referer: QQ_REFERER, cookie: qqCookie },
 			signal: AbortSignal.timeout(10000)
 		});
 		if (res.ok) {
@@ -1110,7 +1136,7 @@ async function proxyNeteaseStream(id, req, res) {
 		target = void 0;
 	}
 	if (target === void 0) {
-		fail("音频流获取失败（免费歌曲可播；VIP/版权歌曲需配置 DSH_MUSIC_COOKIE 登录态）");
+		fail("音频流获取失败（免费歌曲可播；VIP/版权歌曲需配置 DSH_MUSIC_COOKIE 或弹窗扫码登录）");
 		return;
 	}
 	pipeStream(target, req.headers.range, res, fail, { "user-agent": BROWSER_UA, referer: NETEASE_REFERER });
@@ -1133,7 +1159,7 @@ async function proxyQQStream(mid, mediaMid, req, res) {
 		target = void 0;
 	}
 	if (target === void 0) {
-		fail("音频流获取失败（免费歌曲可播；VIP/版权歌曲需配置 DSH_MUSIC_QQ_COOKIE 登录态）");
+		fail("音频流获取失败（免费歌曲可播；VIP/版权歌曲需配置 DSH_MUSIC_QQ_COOKIE 或粘贴 cookie 登录）");
 		return;
 	}
 	pipeStream(target, req.headers.range, res, fail, { "user-agent": BROWSER_UA, referer: QQ_REFERER });
@@ -1162,6 +1188,9 @@ function parseQQPlaylistId(raw) {
  */
 export function apply(ctx) {
 	const state = defaultState();
+
+	// Restore runtime-login cookies persisted across restarts (env vars win).
+	loadCookies();
 
 	// Load the configured NetEase playlist as the built-in queue at startup.
 	refreshBuiltinTracks().then(() => {
@@ -1260,6 +1289,139 @@ export function apply(ctx) {
 		}
 	}));
 
+	// NetEase QR login: get the unikey.
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/dsh-music/netease/login/qr-key",
+		handler: async (_req, res) => {
+			try {
+				const api = await neteaseApiModule();
+				if (!api || typeof api.login_qr_key !== "function") {
+					json(res, { error: "NeteaseCloudMusicApi 包不可用，无法使用二维码登录" }, 501);
+					return;
+				}
+				const result = await api.login_qr_key({ timestamp: Date.now() });
+				const key = result?.body?.data?.unikey;
+				if (!key) {
+					json(res, { error: "获取二维码 key 失败" }, 502);
+					return;
+				}
+				json(res, { key });
+			} catch (error) {
+				json(res, { error: error instanceof Error ? error.message : String(error) }, 502);
+			}
+		}
+	}));
+
+	// NetEase QR login: render the QR image (base64 PNG).
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/dsh-music/netease/login/qr-create",
+		handler: async (req, res) => {
+			try {
+				const key = new URL(req.url, "http://localhost").searchParams.get("key") ?? "";
+				if (key === "") {
+					json(res, { error: "缺少 key 参数" }, 400);
+					return;
+				}
+				const api = await neteaseApiModule();
+				if (!api || typeof api.login_qr_create !== "function") {
+					json(res, { error: "NeteaseCloudMusicApi 包不可用" }, 501);
+					return;
+				}
+				const result = await api.login_qr_create({ key, qrimg: true, timestamp: Date.now() });
+				const data = result?.body?.data || {};
+				json(res, { img: data.qrimg || "", url: data.qrurl || "" });
+			} catch (error) {
+				json(res, { error: error instanceof Error ? error.message : String(error) }, 502);
+			}
+		}
+	}));
+
+	// NetEase QR login: poll scan status; 803 = authorized (cookie saved).
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/dsh-music/netease/login/qr-check",
+		handler: async (req, res) => {
+			try {
+				const key = new URL(req.url, "http://localhost").searchParams.get("key") ?? "";
+				if (key === "") {
+					json(res, { error: "缺少 key 参数" }, 400);
+					return;
+				}
+				const api = await neteaseApiModule();
+				if (!api || typeof api.login_qr_check !== "function") {
+					json(res, { error: "NeteaseCloudMusicApi 包不可用" }, 501);
+					return;
+				}
+				let result = await api.login_qr_check({ key, noCookie: true, timestamp: Date.now() });
+				let body = result?.body || {};
+				let code = Number(body.code ?? result?.code ?? 0);
+				let message = String(body.message ?? result?.message ?? "");
+				let cookie = "";
+				const extract = (resp) => {
+					for (const spot of [resp?.cookie, resp?.body?.cookie, resp?.body?.data?.cookie, resp?.body?.data?.cookies]) {
+						if (typeof spot === "string" && spot.includes("=")) return spot;
+						if (Array.isArray(spot) && spot.length > 0) return spot.join("; ");
+					}
+					return "";
+				};
+				cookie = extract(result);
+				if (code === 803 && cookie === "") {
+					// Retry once without noCookie — the login cookie usually arrives here.
+					try {
+						const retry = await api.login_qr_check({ key, timestamp: Date.now() });
+						body = retry?.body || body;
+						code = Number(body.code ?? retry?.code ?? code);
+						message = String(body.message ?? retry?.message ?? message);
+						cookie = extract(retry);
+					} catch {
+						/* keep first attempt */
+					}
+				}
+				if (code === 803 && cookie !== "") {
+					neteaseCookie = cookie;
+					saveCookies();
+					neteaseCache.delete("nlogin");
+					const status = await neteaseLoginStatus();
+					json(res, { code: 803, message, cookie: true, ...status });
+					return;
+				}
+				json(res, { code, message, nickname: body.nickname ?? "", avatarUrl: body.avatarUrl ?? "" });
+			} catch (error) {
+				json(res, { error: error instanceof Error ? error.message : String(error) }, 502);
+			}
+		}
+	}));
+
+	// NetEase manual cookie set (paste from a browser).
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/dsh-music/netease/login/cookie",
+		handler: async (req, res) => {
+			try {
+				const body = await readBody(req);
+				const parsed = JSON.parse(body || "{}");
+				const cookie = typeof parsed.cookie === "string" ? parsed.cookie.trim() : "";
+				if (cookie === "") {
+					json(res, { error: "cookie 不能为空" }, 400);
+					return;
+				}
+				if (!/\bMUSIC_U=/.test(cookie)) {
+					json(res, { error: "cookie 缺少 MUSIC_U（网易云登录凭证）" }, 400);
+					return;
+				}
+				neteaseCookie = cookie;
+				saveCookies();
+				neteaseCache.delete("nlogin");
+				const status = await neteaseLoginStatus();
+				json(res, { ok: true, ...status });
+			} catch (error) {
+				json(res, { error: error instanceof Error ? error.message : String(error) }, 400);
+			}
+		}
+	}));
+
 	// QQ Music search proxy.
 	ctx.effect(() => ctx.webServer.register({
 		kind: "exact",
@@ -1325,6 +1487,44 @@ export function apply(ctx) {
 				json(res, status);
 			} catch (error) {
 				json(res, { error: error instanceof Error ? error.message : String(error) }, 502);
+			}
+		}
+	}));
+
+	// QQ Music manual cookie set (paste from a browser).
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/dsh-music/qq/login/cookie",
+		handler: async (req, res) => {
+			try {
+				const body = await readBody(req);
+				const parsed = JSON.parse(body || "{}");
+				const cookie = typeof parsed.cookie === "string" ? parsed.cookie.trim() : "";
+				if (cookie === "") {
+					json(res, { error: "cookie 不能为空" }, 400);
+					return;
+				}
+				const obj = parseCookieString(cookie);
+				const uin = qqCookieUin(obj);
+				const playbackKey = qqCookiePlaybackKey(obj);
+				if (!uin) {
+					json(res, { error: "cookie 缺少 uin（QQ 账号）" }, 400);
+					return;
+				}
+				if (!playbackKey) {
+					json(res, {
+						error: "cookie 缺少播放授权票据（qm_keyst/qqmusic_key/music_key）。只有 uin+qqmusic_key 的网页登录态无法换取播放地址，请访问 https://y.qq.com/n/ryqq/player 后再复制 cookie",
+						partial: true
+					}, 400);
+					return;
+				}
+				qqCookie = cookie;
+				saveCookies();
+				qqCache.delete("qlogin");
+				const status = await qqLoginStatus();
+				json(res, { ok: true, ...status });
+			} catch (error) {
+				json(res, { error: error instanceof Error ? error.message : String(error) }, 400);
 			}
 		}
 	}));
