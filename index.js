@@ -1009,7 +1009,12 @@ async function qqResolveStreamUrl(mid, mediaMid) {
 	return void 0;
 }
 
-/** QQ login/profile status derived from the configured cookie (cached 2 min). */
+/** QQ login/profile status derived from the configured cookie (cached 2 min).
+ * Login is judged by the presence of uin + a playback ticket (qm_keyst etc.),
+ * matching how the vkey API actually authorizes playback. The profile
+ * homepage probe only enriches the nickname; a code:1000/301 (session
+ * expired at the profile API) does NOT downgrade the login state — the
+ * playback ticket may still be valid (Mineradio's profileUnavailable case). */
 async function qqLoginStatus() {
 	const key = "qlogin";
 	const cached = qqCache.get(key);
@@ -1017,8 +1022,14 @@ async function qqLoginStatus() {
 	const hasCookie = qqCookie !== "";
 	const uin = qqCookieUin();
 	const playbackKeyReady = qqCookiePlaybackKey() !== "";
-	const value = { loggedIn: false, hasCookie, uin, nickname: "", playbackKeyReady };
+	const value = { loggedIn: false, hasCookie, uin, nickname: "", playbackKeyReady, profileUnavailable: false };
 	if (!hasCookie || !uin) {
+		qqCache.set(key, { value, at: Date.now() });
+		return value;
+	}
+	// Playback entitlement is what matters for streaming: uin + playback ticket.
+	value.loggedIn = playbackKeyReady;
+	if (!playbackKeyReady) {
 		qqCache.set(key, { value, at: Date.now() });
 		return value;
 	}
@@ -1042,15 +1053,17 @@ async function qqLoginStatus() {
 		});
 		if (res.ok) {
 			const json = await res.json().catch(() => null);
-			if (!(json && (json.code === 1000 || json.result === 301))) {
+			if (json && (json.code === 1000 || json.result === 301)) {
+				value.profileUnavailable = true;
+			} else {
 				const profile = json?.data?.profile || {};
 				const nickname = String(profile.nick || profile.nickname || "");
-				if (nickname !== "") value.loggedIn = true;
-				value.nickname = nickname;
+				if (nickname !== "") value.nickname = nickname;
 			}
 		}
 	} catch {
-		/* cookie invalid or unreachable; keep the hasCookie view */
+		value.profileUnavailable = true;
+		/* profile unreachable; the playback login stays valid */
 	}
 	qqCache.set(key, { value, at: Date.now() });
 	return value;
