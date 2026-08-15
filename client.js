@@ -449,7 +449,16 @@ window.__ModuleLoader__.load({
 				audio.preload = "auto";
 				audio.volume = 0.8;
 				audioRef.current = audio;
-				var onTime = function () { setCurrent(audio.currentTime); };
+				var lastReportMs = 0;
+				var onTime = function () {
+					setCurrent(audio.currentTime);
+					// Throttled position reporting (host persists it for resume).
+					var now = Date.now();
+					if (now - lastReportMs > 5000) {
+						lastReportMs = now;
+						postCommand({ action: "position", positionMs: Math.round(audio.currentTime * 1000) }).catch(function () {});
+					}
+				};
 				var onMeta = function () { setDuration(audio.duration || 0); };
 				var onEnded = function () {
 					postCommand({ action: "ended" }).then(function (state) {
@@ -536,6 +545,15 @@ window.__ModuleLoader__.load({
 							setCurrent(0);
 							setDuration(0);
 							setError(null);
+							// Resume a saved position (page reload/restart) on the same track.
+							var savedMs = Number(state.positionMs) || 0;
+							if (savedMs > 1500) {
+								var onMeta = function () {
+									audio.removeEventListener("loadedmetadata", onMeta);
+									try { audio.currentTime = savedMs / 1000; } catch (e) { /* ignore */ }
+								};
+								audio.addEventListener("loadedmetadata", onMeta);
+							}
 						}
 						if (state.playing) tryPlay(state);
 						else audio.pause();

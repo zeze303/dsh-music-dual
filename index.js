@@ -51,6 +51,49 @@ let neteaseCookie = process.env.DSH_MUSIC_COOKIE ?? "";
 let qqCookie = process.env.DSH_MUSIC_QQ_COOKIE ?? "";
 /** Cookie persistence file under DSH_HOME (keeps runtime logins across restarts). */
 const COOKIE_STORE_FILE = process.env.DSH_HOME ? join(process.env.DSH_HOME, "dsh-music-cookies.json") : "";
+/** Full playback-state persistence file under DSH_HOME (queue, playlists,
+ * volume, mode, index, playing, progress). Restored on the next launch. */
+const STATE_STORE_FILE = process.env.DSH_HOME ? join(process.env.DSH_HOME, "dsh-music-state.json") : "";
+/** Debounce window for writing the state file (ms). */
+const STATE_SAVE_DEBOUNCE_MS = 400;
+let stateSaveTimer = null;
+
+/** Persist the playback state (debounced; environment variables still win for
+ * cookies, but the playback state always restores as it was). */
+function saveState(state) {
+	if (STATE_STORE_FILE === "") return;
+	if (stateSaveTimer) clearTimeout(stateSaveTimer);
+	stateSaveTimer = setTimeout(() => {
+		stateSaveTimer = null;
+		try {
+			mkdirSync(process.env.DSH_HOME, { recursive: true });
+			writeFileSync(STATE_STORE_FILE, JSON.stringify({
+				volume: state.volume,
+				mode: state.mode,
+				custom: state.custom,
+				useBuiltin: state.useBuiltin,
+				playlists: state.playlists,
+				activePlaylistId: state.activePlaylistId,
+				index: state.index,
+				playing: state.playing,
+				positionMs: state.positionMs,
+				updatedAt: Date.now()
+			}, null, 2), "utf8");
+		} catch {
+			/* state save failure is non-fatal */
+		}
+	}, STATE_SAVE_DEBOUNCE_MS);
+}
+
+/** Restore the playback state saved by a previous run. */
+function loadState() {
+	if (STATE_STORE_FILE === "") return null;
+	try {
+		return JSON.parse(readFileSync(STATE_STORE_FILE, "utf8"));
+	} catch {
+		return null;
+	}
+}
 /** Refresh the module-level cookie from the persisted store (environment wins). */
 function loadCookies() {
 	if (COOKIE_STORE_FILE === "") return;
@@ -155,8 +198,34 @@ function defaultState() {
 		useBuiltin: true,
 		playlists: [],
 		activePlaylistId: null,
+		positionMs: 0,
 		version: 1
 	};
+}
+
+/** Merge a previously saved state snapshot over the fresh defaults, rebuilding
+ * the queue from the restored playlists/custom. Returns a new state object. */
+function restoreState(saved, fresh) {
+	const state = {
+		...fresh,
+		volume: clamp01(saved?.volume),
+		mode: MODES.includes(saved?.mode) ? saved.mode : fresh.mode,
+		custom: Array.isArray(saved?.custom) ? saved.custom : [],
+		useBuiltin: typeof saved?.useBuiltin === "boolean" ? saved.useBuiltin : true,
+		playlists: Array.isArray(saved?.playlists) ? saved.playlists : [],
+		activePlaylistId: typeof saved?.activePlaylistId === "string" ? saved.activePlaylistId : null,
+		positionMs: Math.max(0, Number(saved?.positionMs) || 0),
+		version: fresh.version
+	};
+	// Drop any active playlist reference that no longer exists.
+	if (state.activePlaylistId !== null && !state.playlists.some((p) => p.id === state.activePlaylistId)) {
+		state.activePlaylistId = null;
+	}
+	state.queue = composeQueue(state);
+	const idx = Math.max(0, Number(saved?.index) || 0);
+	state.index = state.queue.length > 0 ? Math.min(idx, state.queue.length - 1) : 0;
+	state.playing = saved?.playing === true && state.queue.length > 0;
+	return state;
 }
 
 /** Write the client-facing subset of the state. */
@@ -170,6 +239,7 @@ function publicState(state) {
 		builtin: state.useBuiltin,
 		playlists: state.playlists.map((p) => ({ id: p.id, name: p.name, platform: p.platform, count: p.tracks.length })),
 		activePlaylistId: state.activePlaylistId,
+		positionMs: state.positionMs,
 		version: state.version
 	};
 }
@@ -214,6 +284,12 @@ async function applyCommand(state, command) {
 		case "mode":
 			if (MODES.includes(command.mode)) state.mode = command.mode;
 			break;
+		case "position": {
+			// Client-reported playback position of the current track (ms).
+			const ms = Number(command.positionMs);
+			if (Number.isFinite(ms) && ms >= 0) state.positionMs = Math.round(ms);
+			break;
+		}
 		case "add": {
 			const url = typeof command.url === "string" ? command.url.trim() : "";
 			const isExternal = /^https?:\/\/\S+$/.test(url);
@@ -234,6 +310,7 @@ async function applyCommand(state, command) {
 			state.custom.push(track);
 			state.queue = composeQueue(state);
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: `已添加「${track.title}」到播放列表` };
 		}
 		case "remove": {
@@ -256,6 +333,7 @@ async function applyCommand(state, command) {
 				state.playing = false;
 			}
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: `已移除「${removed.title}」` };
 		}
 		case "importPlaylist": {
@@ -304,6 +382,7 @@ async function applyCommand(state, command) {
 			}
 			state.playing = true;
 			state.version += 1;
+			saveState(state);
 			return {
 				ok: true,
 				message: `已导入${platform === "qq" ? " QQ 音乐" : "网易云"}歌单「${playlist.name}」（${playlist.tracks.length} 首）${existing ? "，已刷新" : ""}${state.useBuiltin ? "" : "，默认歌单已隐藏"}，开始播放第一首`
@@ -328,6 +407,7 @@ async function applyCommand(state, command) {
 			state.index = 0;
 			state.playing = true;
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: `已切换到歌单「${playlist.name}」（${playlist.tracks.length} 首）` };
 		}
 		case "playlistRemove": {
@@ -342,12 +422,14 @@ async function applyCommand(state, command) {
 			state.queue = composeQueue(state);
 			if (state.index >= state.queue.length) state.index = state.queue.length > 0 ? state.queue.length - 1 : 0;
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: `已删除歌单「${removed.name}」` };
 		}
 		case "builtin": {
 			state.useBuiltin = command.enable === true;
 			state.queue = composeQueue(state);
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: state.useBuiltin ? "已恢复默认歌单" : "已隐藏默认歌单" };
 		}
 		case "reset":
@@ -359,11 +441,13 @@ async function applyCommand(state, command) {
 			state.index = 0;
 			state.playing = false;
 			state.version += 1;
+			saveState(state);
 			return { ok: true, message: "播放列表已重置为默认歌单" };
 		default:
 			return { ok: false, message: `未知操作: ${String(action)}` };
 	}
 	state.version += 1;
+	saveState(state);
 	return { ok: true, message: "ok" };
 }
 
@@ -1265,16 +1349,18 @@ function parseQQPlaylistId(raw) {
  * @param ctx - host context.
  */
 export function apply(ctx) {
-	const state = defaultState();
-
 	// Restore runtime-login cookies persisted across restarts (env vars win).
 	loadCookies();
+
+	// Full playback-state restore: queue/playlists/volume/mode/index/position.
+	const state = restoreState(loadState(), defaultState());
 
 	// Load the configured NetEase playlist as the built-in queue at startup.
 	refreshBuiltinTracks().then(() => {
 		state.queue = composeQueue(state);
 		if (state.index >= state.queue.length) state.index = 0;
 		state.version += 1;
+		saveState(state);
 	});
 
 	// State snapshot for the browser player.
@@ -1676,12 +1762,14 @@ export function apply(ctx) {
 					}
 					state.playing = true;
 					state.version += 1;
+					saveState(state);
 					const current = state.queue[state.index];
 					return `▶ 正在播放「${current.title} — ${current.artist}」（${state.index + 1}/${state.queue.length}）`;
 				}
 				case "pause":
 					state.playing = false;
 					state.version += 1;
+					saveState(state);
 					return "⏸ 已暂停";
 				case "next":
 				case "prev": {
@@ -1689,6 +1777,7 @@ export function apply(ctx) {
 					state.index = action === "next" ? nextIndex(state, +1) : (state.index - 1 + state.queue.length) % state.queue.length;
 					state.playing = true;
 					state.version += 1;
+					saveState(state);
 					const current = state.queue[state.index];
 					return `${action === "next" ? "⏭" : "⏮"} 切到「${current.title} — ${current.artist}」`;
 				}
@@ -1715,12 +1804,14 @@ export function apply(ctx) {
 					if (typeof args.volume !== "number") return "请提供 volume(0-1)";
 					state.volume = clamp01(args.volume);
 					state.version += 1;
+					saveState(state);
 					return `音量已设为 ${Math.round(state.volume * 100)}%`;
 				}
 				case "mode": {
 					if (!MODES.includes(args.mode)) return `模式必须是 ${MODES.join("/")}`;
 					state.mode = args.mode;
 					state.version += 1;
+					saveState(state);
 					return `循环模式已切换为 ${state.mode}`;
 				}
 				case "playlist": {
