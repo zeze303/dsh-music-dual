@@ -25,8 +25,11 @@ window.__ModuleLoader__.load({
 			".dshm-card-expanded .dshm-header{height:62px}",
 			".dshm-cover{position:absolute;left:10px;top:50%;transform:translateY(-50%);flex:none;width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.25),0 4px 12px rgba(0,0,0,0.3);transition:width .35s cubic-bezier(.22,1,.36,1),height .35s cubic-bezier(.22,1,.36,1),border-radius .35s cubic-bezier(.22,1,.36,1),font-size .35s cubic-bezier(.22,1,.36,1)}",
 			".dshm-cover-lg{width:48px;height:48px;border-radius:14px;font-size:22px}",
-			".dshm-meta{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:118px;text-align:center;min-width:0}",
-			".dshm-title{font-size:13px;font-weight:600;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;text-align:center;text-shadow:0 1px 4px rgba(0,0,0,0.4);transition:font-size .35s cubic-bezier(.22,1,.36,1),line-height .35s cubic-bezier(.22,1,.36,1)}",
+			// 展开态：歌名居中；折叠态：歌名挨着封面、不挤占右侧按钮
+			".dshm-meta{position:absolute;top:50%;transform:translateY(-50%);min-width:0;text-align:center;max-width:118px}",
+			".dshm-card-expanded .dshm-meta{left:50%;transform:translate(-50%,-50%);max-width:150px}",
+			".dshm-header-mini .dshm-meta{left:52px;right:128px;max-width:none;text-align:left}",
+			".dshm-title{font-size:13px;font-weight:600;line-height:18px;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.4);transition:font-size .35s cubic-bezier(.22,1,.36,1),line-height .35s cubic-bezier(.22,1,.36,1)}",
 			".dshm-header-mini .dshm-title{font-size:12px;line-height:16px}",
 			".dshm-head-actions{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:120px;height:34px}",
 			".dshm-head-group{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none}",
@@ -46,7 +49,7 @@ window.__ModuleLoader__.load({
 			".dshm-card:not(.dshm-card-expanded) .dshm-controls .dshm-play-btn,.dshm-card:not(.dshm-card-expanded) .dshm-controls .dshm-next-btn{view-transition-name:none}",
 			"::view-transition-group(dshm-play),::view-transition-group(dshm-next){animation-duration:.38s;animation-timing-function:cubic-bezier(.22,1,.36,1)}",
 			"::view-transition-old(root),::view-transition-new(root){animation:none}",
-			".dshm-artist{font-size:10.5px;line-height:14px;color:rgba(255,255,255,0.78);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,0.35)}",
+			".dshm-artist{font-size:10.5px;line-height:14px;color:rgba(255,255,255,0.78);text-shadow:0 1px 3px rgba(0,0,0,0.35)}",
 			".dshm-btn{flex:none;width:26px;height:26px;border:none;border-radius:9px;background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;padding:0;text-shadow:0 1px 3px rgba(0,0,0,0.35)}",
 			".dshm-btn:hover{background:rgba(255,255,255,0.18)}",
 			".dshm-btn-primary{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,rgba(255,255,255,0.95),rgba(255,255,255,0.7));color:#11131f;box-shadow:0 4px 14px rgba(0,0,0,0.35);font-size:14px}",
@@ -109,7 +112,12 @@ window.__ModuleLoader__.load({
 			".dshm-pl-active{background:rgba(255,255,255,0.28);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.3)}",
 			".dshm-pl-name{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 			".dshm-pl-x{flex:none;border:none;background:transparent;color:rgba(255,255,255,0.6);cursor:pointer;font-size:10px;padding:0 1px;border-radius:4px}",
-			".dshm-pl-x:hover{color:#ff8d9a;background:rgba(255,141,154,0.2)}"
+			".dshm-pl-x:hover{color:#ff8d9a;background:rgba(255,141,154,0.2)}",
+			// 标题/歌手滚动（溢出时无缝循环）
+			".dshm-mq{overflow:hidden;white-space:nowrap}",
+			".dshm-mq-track{display:inline-flex;will-change:transform;animation:dshm-scroll 9s linear infinite}",
+			".dshm-mq-track span{flex:none;padding-right:48px}",
+			"@keyframes dshm-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}"
 		].join("");
 
 		/** Inject the player stylesheet once. */
@@ -322,6 +330,36 @@ window.__ModuleLoader__.load({
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ cookie: cookie })
 			}).then(function (res) { return res.json(); });
+		}
+
+		/** Title/artist marquee: duplicates the text and scrolls it seamlessly
+		 * when it overflows its box; renders plain text otherwise. */
+		function Marquee(props) {
+			var wrapRef = react.useRef(null);
+			var [overflow, setOverflow] = react.useState(false);
+			react.useLayoutEffect(function () {
+				var el = wrapRef.current;
+				if (!el) return;
+				var check = function () {
+					setOverflow(el.scrollWidth > el.clientWidth + 1);
+				};
+				check();
+				if (typeof ResizeObserver !== "undefined") {
+					var ro = new ResizeObserver(check);
+					ro.observe(el);
+					return function () { ro.disconnect(); };
+				}
+				window.addEventListener("resize", check);
+				return function () { window.removeEventListener("resize", check); };
+			}, [props.text]);
+			if (overflow) {
+				return h("div", { className: "dshm-mq", ref: wrapRef },
+					h("div", { className: "dshm-mq-track" }, [
+						h("span", null, props.text),
+						h("span", null, props.text)
+					]));
+			}
+			return h("div", { className: "dshm-mq", ref: wrapRef }, h("span", null, props.text));
 		}
 
 		/**
@@ -943,8 +981,8 @@ window.__ModuleLoader__.load({
 				}, [
 					h(CoverArt, { cover: track ? track.cover : "", index: remote ? remote.index : 0, large: expanded }),
 					h("div", { className: "dshm-meta" }, [
-						h("div", { className: "dshm-title" }, track ? track.title : (expanded ? "未在播放" : "音乐播放器")),
-						h("div", { className: "dshm-artist" }, track ? track.artist : (expanded ? "点一首歌开始吧" : "点击展开"))
+						h("div", { className: "dshm-title" }, track ? h(Marquee, { text: track.title }) : (expanded ? "未在播放" : "音乐播放器")),
+						h("div", { className: "dshm-artist" }, track ? h(Marquee, { text: track.artist }) : (expanded ? "点一首歌开始吧" : "点击展开"))
 					]),
 					h("div", { className: "dshm-head-actions" }, [
 						// 折叠态按钮组：播放 / 下一首 / 展开（切换时 FLIP 飞到面板控制行）
