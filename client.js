@@ -30,8 +30,8 @@ window.__ModuleLoader__.load({
 			".dshm-header-mini .dshm-title{font-size:12px;line-height:16px}",
 			".dshm-head-actions{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:120px;height:34px}",
 			".dshm-head-group{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none}",
-			// 视图导航行（封面和歌名下方、进度条上方）—— 水平排列
-			".dshm-nav{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;padding:8px 12px 2px}",
+			// 视图导航行（最顶部，封面和歌名上方）—— 水平排列
+			".dshm-nav{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;justify-content:center;gap:6px;padding:10px 12px 4px}",
 			".dshm-nav-btn{flex:none;width:34px;height:26px;min-width:34px;padding:0;border-radius:9px;font-size:12px}",
 			".dshm-nav .dshm-btn-active{background:rgba(255,255,255,0.28);color:#fff}",
 			".dshm-head-group-in{opacity:1;pointer-events:auto}",
@@ -893,6 +893,47 @@ window.__ModuleLoader__.load({
 
 			var expanded = !collapsed;
 			return h("div", { style: cardStyle, ref: cardRef }, h("div", { className: "dshm-card" + (expanded ? " dshm-card-expanded" : "") }, [
+				// 视图导航行：播放列表 / 搜索 / 歌单 / 登录 / 折叠（最顶部，封面歌名上方）
+				expanded ? h("div", { className: "dshm-nav" }, [
+					h("button", {
+						className: "dshm-btn dshm-nav-btn" + (view === "queue" ? " dshm-btn-active" : ""),
+						title: "播放列表",
+						onClick: handleClick(function (event) { event.stopPropagation(); setView("queue"); })
+					}, h(Icon, { name: "list", size: 14 })),
+					h("button", {
+						className: "dshm-btn dshm-nav-btn" + (view === "search" ? " dshm-btn-active" : ""),
+						title: "搜索音乐（网易云 / QQ 音乐）",
+						onClick: handleClick(function (event) {
+							event.stopPropagation();
+							setView("search");
+							setSearchQuery("");
+							setResults(null);
+							setSearchError(null);
+						})
+					}, h(Icon, { name: "search", size: 14 })),
+					h("button", {
+						className: "dshm-btn dshm-nav-btn" + (view === "playlists" ? " dshm-btn-active" : ""),
+						title: "歌单管理",
+						onClick: handleClick(function (event) { event.stopPropagation(); setView("playlists"); })
+					}, h(Icon, { name: "import_", size: 14 })),
+					h("button", {
+						className: "dshm-btn dshm-nav-btn" + (view === "login" ? " dshm-btn-active" : ""),
+						title: "登录 / 账号（扫码或粘贴 cookie）",
+						onClick: handleClick(function (event) {
+							event.stopPropagation();
+							setView("login");
+							refreshLoginStatus();
+						})
+					}, h(Icon, { name: "user", size: 14 })),
+					h("button", {
+						className: "dshm-btn dshm-nav-btn",
+						title: "折叠",
+						onClick: handleClick(function (event) {
+							event.stopPropagation();
+							toggleCollapsed();
+						})
+					}, h(Icon, { name: "chevronUp", size: 14 }))
+				]) : null,
 				// 共享头部：封面/歌名/歌手在同一节点上做非线性尺寸过渡，
 				// 两种形态的按钮组交叉淡入淡出
 				h("div", {
@@ -940,47 +981,6 @@ window.__ModuleLoader__.load({
 				// 展开面板：grid 行高非线性动画展开/收起
 				h("div", { className: "dshm-panel" }, h("div", { className: "dshm-panel-inner" }, [
 					h("div", { className: "dshm-body" }, [
-						// 视图导航行：播放列表 / 搜索 / 歌单 / 登录 / 折叠（封面和歌名下方）
-						expanded ? h("div", { className: "dshm-nav" }, [
-							h("button", {
-								className: "dshm-btn dshm-nav-btn" + (view === "queue" ? " dshm-btn-active" : ""),
-								title: "播放列表",
-								onClick: handleClick(function (event) { event.stopPropagation(); setView("queue"); })
-							}, h(Icon, { name: "list", size: 14 })),
-							h("button", {
-								className: "dshm-btn dshm-nav-btn" + (view === "search" ? " dshm-btn-active" : ""),
-								title: "搜索音乐（网易云 / QQ 音乐）",
-								onClick: handleClick(function (event) {
-									event.stopPropagation();
-									setView("search");
-									setSearchQuery("");
-									setResults(null);
-									setSearchError(null);
-								})
-							}, h(Icon, { name: "search", size: 14 })),
-							h("button", {
-								className: "dshm-btn dshm-nav-btn" + (view === "playlists" ? " dshm-btn-active" : ""),
-								title: "歌单管理",
-								onClick: handleClick(function (event) { event.stopPropagation(); setView("playlists"); })
-							}, h(Icon, { name: "import_", size: 14 })),
-							h("button", {
-								className: "dshm-btn dshm-nav-btn" + (view === "login" ? " dshm-btn-active" : ""),
-								title: "登录 / 账号（扫码或粘贴 cookie）",
-								onClick: handleClick(function (event) {
-									event.stopPropagation();
-									setView("login");
-									refreshLoginStatus();
-								})
-							}, h(Icon, { name: "user", size: 14 })),
-							h("button", {
-								className: "dshm-btn dshm-nav-btn",
-								title: "折叠",
-								onClick: handleClick(function (event) {
-									event.stopPropagation();
-									toggleCollapsed();
-								})
-							}, h(Icon, { name: "chevronUp", size: 14 }))
-						]) : null,
 						h("div", { className: "dshm-row" }, [
 							h("div", {
 								className: "dshm-progress",
